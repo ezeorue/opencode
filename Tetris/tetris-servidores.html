@@ -318,6 +318,18 @@ function collides(pc, boardArr){
 
 /* ================== GRÁFICOS ================== */
 function drawCell(x, y, color, size, style){
+  if(style === "ghost"){
+    ctx.fillStyle = color;
+    ctx.globalAlpha = .12;
+    ctx.fillRect(x+1, y+1, size-2, size-2);
+    ctx.globalAlpha = .45;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x+2, y+2, size-4, size-4);
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 1;
+    return;
+  }
   ctx.fillStyle = color;
   ctx.fillRect(x, y, size, size);
   ctx.fillStyle = "rgba(255,255,255,.22)";
@@ -337,12 +349,6 @@ function drawCell(x, y, color, size, style){
   const cx = x+size/2, cy = y+size/2;
   ctx.fillRect(cx-1.5, cy-size*.18, 3, size*.36);
   ctx.fillRect(cx-size*.18, cy-1.5, size*.36, 3);
-  if(style === "ghost"){
-    ctx.fillStyle = color;
-    ctx.globalAlpha = .18;
-    ctx.fillRect(x+1, y+1, size-2, size-2);
-    ctx.globalAlpha = 1;
-  }
 }
 
 function draw(){
