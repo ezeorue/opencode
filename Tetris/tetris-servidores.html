@@ -193,7 +193,16 @@
       <b>←</b><b>→</b> mover&nbsp;&nbsp;<b>↓</b> bajar<br>
       <b>↑</b> rotar&nbsp;&nbsp;<b>Espacio</b> drop<br>
       <b>C</b> hold&nbsp;&nbsp;<b>P</b> pausa<br>
+      <b>M</b> música&nbsp;&nbsp;<b>S</b> efectos<br>
       <span>PRESSIONA START PARA BOOTEAR</span>
+    </div>
+    <div class="unit">
+      <h3>◉ AUDIO MIXER</h3>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <button class="btn" id="btnMusic">♪ MÚSICA: <span id="musicState">ON</span></button>
+        <button class="btn" id="btnSfx">EFECTOS: <span id="sfxState">ON</span></button>
+      </div>
+      <div style="font-size:9px;color:var(--dim);margin-top:6px;line-height:1.7;" id="audioInfo"></div>
     </div>
     <div class="touch">
       <button class="btn" id="tLeft">◀</button>
@@ -412,6 +421,7 @@ function clearLines(){
   const full = [];
   for(let r=0;r<ROWS;r++) if(board[r].every(cell => cell)) full.push(r);
   if(!full.length) return;
+  AUDIO.line(full.length);
   // animación de "fresco del rack" (desvanecer)
   let phase = 0;
   const anim = setInterval(() => {
@@ -462,6 +472,8 @@ function updateTemp(){
 }
 function runGameOver(){
   over = true; running = false;
+  AUDIO.stopMusic();
+  AUDIO.gameOver();
   const ov = $("overlay");
   ov.classList.remove("hidden");
   ov.innerHTML = "";
@@ -488,7 +500,7 @@ function rotate(){
   const kicks = [0,-1,1,-2,2];
   for(const k of kicks){
     const t = {...n, x: n.x+k};
-    if(!collides(t, board)){ current = t; draw(); return; }
+    if(!collides(t, board)){ current = t; AUDIO.blip(); draw(); return; }
   }
 }
 function softDrop(){
@@ -503,6 +515,7 @@ function hardDrop(){
   while(!collides({...clone(current), y: current.y+1}, board)){ current.y++; dist++; }
   score += dist*2;
   $("score").textContent = score;
+  AUDIO.drop();
   draw();
   lockPiece();
 }
@@ -523,6 +536,7 @@ function doHold(){
     if(collides(current, board)) gameOver();
   }
   canHold = false;
+  AUDIO.hold();
   draw();
 }
 function lockPiece(){
@@ -539,6 +553,7 @@ function togglePause(){
   paused = !paused;
   const ov = $("overlay");
   if(paused){
+    AUDIO.pauseMusic();
     ov.classList.remove("hidden");
     ov.innerHTML = `
       <h1 class="big" style="color:var(--yellow);">PAUSA</h1>
@@ -546,6 +561,7 @@ function togglePause(){
       <button class="btn btn-primary" id="resBtn" style="width:200px;">CONTINUAR</button>`;
     $("resBtn").onclick = togglePause;
   } else {
+    AUDIO.resumeMusic();
     ov.classList.add("hidden");
   }
 }
@@ -583,9 +599,188 @@ function start(){
   running = true; over = false; paused = false;
   bootTime = Date.now();
   $("overlay").classList.add("hidden");
+  AUDIO.startMusic();
   spawn();
   draw();
 }
+
+/* ================== AUDIO ENGINE ================== */
+const AUDIO = (() => {
+  const FILES = { music: "musicaFondo.mp3", line: "linea.mp3" };
+
+  let ctx = null, musicOn = true, sfxOn = true;
+  let bgm = null, bgmFailed = false;
+  let lineEl = null, lineFailed = false;
+  let synthTimer = null, step = 0, nextT = 0;
+  let synthMode = false;
+  const SPB = 60 / 150;
+
+  const N = { A1:55, B1:61.74, C2:65.41, D2:73.42, E2:82.41, F2:87.31, G2:98.00,
+              A2:110, B2:123.47, C3:130.81, D3:146.83, E3:164.81, F3:174.61, G3:196.00,
+              A3:220, B3:246.94, C4:261.63, D4:293.66, E4:329.63, F4:349.23, G4:392.00,
+              A4:440, B4:493.88, C5:523.25, D5:587.33, E5:659.25, F5:698.46, G5:783.99,
+              A5:880, C6:1046.50 };
+
+  function ensureCtx(){
+    if(!ctx){
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if(!AC) return false;
+      ctx = new AC();
+    }
+    if(ctx.state === "suspended") ctx.resume();
+    return true;
+  }
+  function tone(freq, t, dur, type, vol, dest){
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(vol, 0.0002), t + 0.005);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  let noiseBuf = null;
+  function hat(t, vol, dest){
+    if(!noiseBuf){
+      noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.5, ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for(let i=0;i<d.length;i++) d[i] = Math.random()*2-1;
+    }
+    const s = ctx.createBufferSource(); s.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = "highpass"; f.frequency.value = 7000;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.03);
+    s.connect(f); f.connect(g); g.connect(dest);
+    s.start(t); s.stop(t + 0.05);
+  }
+
+  /* --- secuencias chiptune de respaldo --- */
+  function eighth(...ns){ return ns.flatMap(n => [n, 0]); }
+  const BASS = [].concat(
+    eighth(N.A2,N.A2,N.C3,N.A2, N.A2,N.A2,N.B2,N.A2),
+    eighth(N.F2,N.F2,N.A2,N.F2, N.A2,N.C3,N.A2,N.F2),
+    eighth(N.C3,N.C3,N.E3,N.C3, N.C3,N.C3,N.E3,N.C3),
+    eighth(N.G2,N.G2,N.B2,N.G2, N.B2,N.D3,N.B2,N.G2)
+  );
+  const LEAD = [].concat(
+    eighth(0,N.A4,0,N.E4, 0,N.C4,0,N.A3, 0,N.C4,0,N.A3, 0,N.E4,0,N.A4),
+    eighth(0,N.A4,0,N.E4, 0,N.A4,0,N.C5, 0,N.A4,0,N.C5, 0,N.A4,0,N.E4),
+    eighth(0,N.C5,0,N.G4, 0,N.E4,0,N.C4, 0,N.E4,0,N.G4, 0,N.E4,0,N.C4),
+    eighth(0,N.B4,0,N.G4, 0,N.E4,0,N.D4, 0,N.B4,0,N.D4, 0,N.B4,0,N.G4)
+  );
+  function synthSchedule(){
+    if(!ctx || !synthMode) return;
+    const dest = ctx.destination;
+    while(nextT < ctx.currentTime + 0.2){
+      const i = step % 64, t = nextT;
+      if(BASS[i]) tone(BASS[i], t, SPB*0.22, "triangle", 0.45, dest);
+      if(LEAD[i]) tone(LEAD[i], t, SPB*0.16, "square", 0.05, dest);
+      if(i % 4 === 2) hat(t, 0.02, dest);
+      step++; nextT += SPB/4;
+    }
+  }
+  function startSynthMusic(){
+    if(!musicOn || !ensureCtx()) return;
+    synthMode = true;
+    step = 0; nextT = ctx.currentTime + 0.05;
+    if(synthTimer) return;
+    synthTimer = setInterval(synthSchedule, 25);
+  }
+  function stopSynthMusic(){
+    synthMode = false;
+    if(synthTimer){ clearInterval(synthTimer); synthTimer = null; }
+  }
+
+  /* --- música de fondo --- */
+  function startMusic(){
+    if(!musicOn) return;
+    if(!bgm && !bgmFailed){
+      try{
+        bgm = new Audio(FILES.music);
+        bgm.loop = true;
+        bgm.preload = "auto";
+        bgm.volume = 0.6;
+        bgm.addEventListener("error", () => { bgmFailed = true; });
+      }catch(e){ bgmFailed = true; }
+    }
+    if(bgm && !bgmFailed){
+      const p = bgm.play();
+      if(p && p.catch) p.catch(() => { bgmFailed = true; startSynthMusic(); });
+    } else startSynthMusic();
+  }
+  function pauseMusic(){ if(bgm && !bgm.paused) bgm.pause(); }
+  function resumeMusic(){
+    if(!musicOn) return;
+    if(bgm && !bgmFailed){
+      const p = bgm.play();
+      if(p && p.catch) p.catch(() => { bgmFailed = true; startSynthMusic(); });
+    } else startSynthMusic();
+  }
+  function stopMusic(){
+    if(bgm){ bgm.pause(); bgm.currentTime = 0; }
+    stopSynthMusic();
+  }
+
+  /* --- efectos de sonido --- */
+  function lineSound(n){
+    if(!sfxOn) return;
+    if(!lineFailed){
+      try{
+        if(!lineEl){
+          lineEl = new Audio(FILES.line);
+          lineEl.addEventListener("error", () => { lineFailed = true; });
+        }
+        lineEl.currentTime = 0;
+        const p = lineEl.play();
+        if(p && p.catch) p.catch(() => { lineFailed = true; synthLine(n); });
+        return;
+      }catch(e){}
+    }
+    synthLine(n);
+  }
+  function synthLine(n){
+    if(!ensureCtx()) return;
+    const t0 = ctx.currentTime;
+    const arp = [N.C5, N.E5, N.G5, N.C6];
+    const count = Math.min(1 + n, 4);
+    tone(N.C3, t0, 0.18, "sine", 0.4, ctx.destination);
+    for(let i=0;i<count;i++)
+      tone(arp[i], t0 + 0.06 + i*0.055, 0.22, "square", 0.12, ctx.destination);
+  }
+  function blip(){ if(!sfxOn || !ensureCtx()) return; tone(N.E6, ctx.currentTime, 0.05, "square", 0.06, ctx.destination); }
+  function dropSound(){ if(!sfxOn || !ensureCtx()) return; tone(N.C2, ctx.currentTime, 0.14, "sine", 0.5, ctx.destination); }
+  function holdSound(){ if(!sfxOn || !ensureCtx()) return; tone(N.B4, ctx.currentTime, 0.06, "square", 0.06, ctx.destination); }
+  function gameOverSound(){
+    if(!sfxOn || !ensureCtx()) return;
+    const t0 = ctx.currentTime;
+    const seq = [N.A4, 415.30, N.G4, N.F4, 311.13, N.C4, 207.65];
+    seq.forEach((f,i)=> tone(f, t0 + i*0.16, 0.4, "sawtooth", 0.1, ctx.destination));
+  }
+
+  /* --- UI --- */
+  function updateUI(){
+    $("musicState").textContent = musicOn ? "ON" : "OFF";
+    $("musicState").style.color = musicOn ? "var(--green)" : "var(--red)";
+    $("sfxState").textContent = sfxOn ? "ON" : "OFF";
+    $("sfxState").style.color = sfxOn ? "var(--green)" : "var(--red)";
+    $("audioInfo").innerHTML =
+      `MÚSICA: ${bgmFailed ? "chip interno" : "musicaFondo.mp3"}<br>` +
+      `EFECTO: ${lineFailed ? "chip interno" : "linea.mp3"}`;
+  }
+  function setMusic(on){
+    musicOn = on;
+    if(on) resumeMusic();
+    else { if(bgm) bgm.pause(); stopSynthMusic(); }
+    updateUI();
+  }
+  function setSfx(on){ sfxOn = on; updateUI(); }
+
+  return { startMusic, stopMusic, pauseMusic, resumeMusic,
+           line: lineSound, blip, drop: dropSound, hold: holdSound, gameOver: gameOverSound,
+           setMusic, setSfx, get musicOn(){ return musicOn; }, get sfxOn(){ return sfxOn; },
+           updateUI };
+})();
 
 /* ================== LEGEND ================== */
 function buildLegend(){
@@ -602,6 +797,8 @@ document.addEventListener("keydown", e => {
   else if(e.key === " ") { e.preventDefault(); hardDrop(); }
   else if(e.key === "c" || e.key === "C") doHold();
   else if(e.key === "p" || e.key === "P") togglePause();
+  else if(e.key === "m" || e.key === "M") AUDIO.setMusic(!AUDIO.musicOn);
+  else if(e.key === "s" || e.key === "S") AUDIO.setSfx(!AUDIO.sfxOn);
   else if(e.key === "Enter" && over) init();
 });
 
@@ -614,6 +811,8 @@ $("tDrop").onclick  = () => hardDrop();
 $("tHold").onclick  = () => doHold();
 
 $("holdBtn").onclick = () => doHold();
+$("btnMusic").onclick = () => AUDIO.setMusic(!AUDIO.musicOn);
+$("btnSfx").onclick = () => AUDIO.setSfx(!AUDIO.sfxOn);
 $("startBtn").onclick = () => { init(); start(); };
 
 /* ================== BOOT ================== */
@@ -621,6 +820,7 @@ buildLegend();
 init();
 renderMini("nextGrid", queue[0]);
 updateTemp();
+AUDIO.updateUI();
 requestAnimationFrame(loop);
 </script>
 </body>
