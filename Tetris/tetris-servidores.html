@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TETRIS DATA CENTER — Servidores & Hardware</title>
+<style>
+  :root {
+    --bg: #0a0f14;
+    --panel: #111820;
+    --panel-border: #22303c;
+    --cyan: #00e5ff;
+    --green: #00e676;
+    --purple: #aa47ff;
+    --orange: #ff9100;
+    --red: #ff5252;
+    --blue: #448aff;
+    --yellow: #ffee58;
+    --text: #d7e2ec;
+    --dim: #5c6b78;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background:
+      radial-gradient(ellipse at 50% -20%, #16303f 0%, transparent 60%),
+      repeating-linear-gradient(0deg, #0c131b 0 2px, #0a0f14 2px 4px),
+      var(--bg);
+    font-family: "Consolas", "Courier New", monospace;
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    user-select: none;
+  }
+  .rack {
+    display: flex;
+    gap: 18px;
+    align-items: flex-start;
+    padding: 24px;
+    background: linear-gradient(180deg, #151d26, #0d131b);
+    border: 2px solid var(--panel-border);
+    border-radius: 12px;
+    box-shadow:
+      0 0 0 1px #05080c,
+      0 0 0 4px #0b1117,
+      0 0 60px rgba(0, 229, 255, .12),
+      inset 0 0 30px rgba(0,0,0,.6);
+  }
+  .rack::before {
+    content: "◉ TETRIS DATA CENTER ◉";
+    position: absolute;
+    top: 8px; left: 50%;
+    transform: translateX(-50%);
+    font-size: 10px;
+    letter-spacing: 6px;
+    color: var(--dim);
+    text-transform: uppercase;
+  }
+  .column { display: flex; flex-direction: column; gap: 14px; }
+  .unit {
+    background: #0d141b;
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    position: relative;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+  }
+  .unit h3 {
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+  .value {
+    font-size: 22px;
+    font-weight: bold;
+    color: var(--cyan);
+    text-shadow: 0 0 10px rgba(0,229,255,.5);
+    font-variant-numeric: tabular-nums;
+  }
+  .led-row { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .led {
+    width: 9px; height: 9px; border-radius: 50%;
+    background: #1a242e;
+    box-shadow: inset 0 0 2px #000;
+  }
+  .led.on  { background: var(--green);  box-shadow: 0 0 8px var(--green);  animation: blink 1.2s infinite; }
+  .led.amber{ background: var(--orange); box-shadow: 0 0 8px var(--orange); animation: blink .8s infinite; }
+  .led.red { background: var(--red);    box-shadow: 0 0 8px var(--red);    animation: blink .5s infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+
+  #board {
+    border: 2px solid var(--panel-border);
+    background: linear-gradient(180deg, #0a0f14, #070b10);
+    border-radius: 6px;
+    box-shadow: inset 0 0 40px rgba(0,0,0,.8), 0 0 20px rgba(0,0,0,.5);
+    display: block;
+    image-rendering: pixelated;
+  }
+  .side { width: 200px; display: flex; flex-direction: column; gap: 14px; }
+  .next-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-top: 4px; }
+  .next-cell {
+    aspect-ratio: 1;
+    background: #0a1016;
+    border: 1px solid #1b2630;
+    border-radius: 3px;
+  }
+  .next-cell.filled { border-color: transparent; box-shadow: inset 0 0 6px rgba(0,0,0,.4); }
+  .keys { font-size: 10px; line-height: 1.7; color: var(--dim); }
+  .keys b { color: var(--text); background: #1b2630; padding: 1px 5px; border-radius: 3px; font-weight: normal; border: 1px solid #2b3a48; }
+  .keys span { color: var(--cyan); }
+  .btn {
+    width: 100%;
+    padding: 9px;
+    font-family: inherit;
+    font-size: 12px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--text);
+    background: linear-gradient(180deg, #1a2430, #121a23);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .btn:hover { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 14px rgba(0,229,255,.25); }
+  .btn:active { transform: scale(.96); }
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    background: rgba(4, 8, 12, .86);
+    backdrop-filter: blur(2px);
+    border-radius: 6px;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .overlay.hidden { display: none; }
+  .overlay h1 { font-size: 26px; letter-spacing: 4px; color: var(--cyan); text-shadow: 0 0 18px rgba(0,229,255,.7); }
+  .overlay p { font-size: 12px; color: var(--dim); max-width: 260px; line-height: 1.8; }
+  .overlay .big { font-size: 40px; letter-spacing: 6px; }
+  .version { position: fixed; bottom: 8px; right: 12px; font-size: 9px; color: #2c3a46; letter-spacing: 2px; }
+  .btn-primary { border-color: var(--cyan); color: var(--cyan); }
+
+  .touch { display: none; }
+  @media (max-width: 860px) {
+    body { overflow: auto; }
+    .rack { flex-direction: column; }
+    .side { width: 100%; flex-direction: row; flex-wrap: wrap; }
+    .side .unit { flex: 1; min-width: 140px; }
+    .touch { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+    .touch .btn { flex: 1; }
+  }
+</style>
+</head>
+<body>
+
+<div class="rack" id="rack">
+  <!-- Columna izquierda: stats -->
+  <div class="column" style="width:170px;">
+    <div class="unit">
+      <h3>◉ Score</h3>
+      <div class="value" id="score">0</div>
+    </div>
+    <div class="unit">
+      <h3>◉ Líneas</h3>
+      <div class="value" id="lines">0</div>
+    </div>
+    <div class="unit">
+      <h3>◉ Nivel / Mhz</h3>
+      <div class="value" id="level">1</div>
+      <div class="led-row">
+        <div class="led" id="led1"></div>
+        <div class="led" id="led2"></div>
+        <div class="led" id="led3"></div>
+        <div class="led" id="led4"></div>
+        <div class="led" id="led5"></div>
+      </div>
+    </div>
+    <div class="unit">
+      <h3>◉ HOLD</h3>
+      <div class="next-grid" id="holdGrid"></div>
+      <button class="btn" id="holdBtn" style="margin-top:8px;">C · Buffer</button>
+    </div>
+    <div class="unit keys">
+      <b>←</b><b>→</b> mover&nbsp;&nbsp;<b>↓</b> bajar<br>
+      <b>↑</b> rotar&nbsp;&nbsp;<b>Espacio</b> drop<br>
+      <b>C</b> hold&nbsp;&nbsp;<b>P</b> pausa<br>
+      <span>PRESSIONA START PARA BOOTEAR</span>
+    </div>
+    <div class="touch">
+      <button class="btn" id="tLeft">◀</button>
+      <button class="btn" id="tRot">ROT</button>
+      <button class="btn" id="tRight">▶</button>
+      <button class="btn" id="tDown">▼</button>
+      <button class="btn" id="tDrop">DROP</button>
+      <button class="btn" id="tHold">HOLD</button>
+    </div>
+  </div>
+
+  <!-- Tablero central -->
+  <div style="position:relative;">
+    <canvas id="board" width="300" height="600"></canvas>
+    <div class="overlay" id="overlay">
+      <h1 class="big">TETRIS</h1>
+      <h1>DATA CENTER</h1>
+      <p id="overlayMsg">Servidores montados en el rack.<br>Completa líneas para virtualizar más.<br>¡No dejes que la sala se sobrecaliente!</p>
+      <button class="btn btn-primary" id="startBtn" style="width:200px;font-size:16px;">▶ START</button>
+    </div>
+  </div>
+
+  <!-- Columna derecha: next + specs -->
+  <div class="column" style="width:200px;">
+    <div class="unit">
+      <h3>◉ Next / Encolado</h3>
+      <div class="next-grid" id="nextGrid"></div>
+    </div>
+    <div class="unit">
+      <h3>◉ Estado del Rack</h3>
+      <div class="led-row">
+        <div class="led on"></div>
+        <div class="led on"></div>
+        <div class="led amber"></div>
+        <div class="led on"></div>
+        <div class="led red"></div>
+      </div>
+      <div style="font-size:10px;color:var(--dim);margin-top:8px;line-height:1.8;" id="temp"></div>
+    </div>
+    <div class="unit">
+      <h3>◉ Hardware</h3>
+      <div style="font-size:10px;color:var(--dim);line-height:1.9;" id="legend"></div>
+    </div>
+  </div>
+</div>
+<div class="version">FW 1.4.2 · ISO 3000 · TEMP MONITORING OK</div>
+
+<script>
+"use strict";
+
+/* ================== TEMÁTICA HARDWARE ================== */
+const PIECES = [
+  { name: "SERVIDOR",  type: "I", color: "#00e5ff", shape: [[1,1,1,1]] },
+  { name: "PSU FONTE", type: "O", color: "#ffee58", shape: [[1,1],[1,1]] },
+  { name: "PLACA BASE",type: "T", color: "#aa47ff", shape: [[0,1,0],[1,1,1]] },
+  { name: "CPU",       type: "S", color: "#00e676", shape: [[0,1,1],[1,1,0]] },
+  { name: "GPU",       type: "Z", color: "#ff5252", shape: [[1,1,0],[0,1,1]] },
+  { name: "RAM",       type: "J", color: "#448aff", shape: [[1,0,0],[1,1,1]] },
+  { name: "HDD",       type: "L", color: "#ff9100", shape: [[0,0,1],[1,1,1]] }
+];
+const COLORS = { I:"#00e5ff", O:"#ffee58", T:"#aa47ff", S:"#00e676", Z:"#ff5252", J:"#448aff", L:"#ff9100" };
+const LEGEND = {
+  I: "█ SERVIDOR    1U rack",
+  O: "█ FUENTE PSU  modular",
+  T: "█ PLACA BASE  ATX",
+  S: "█ CPU         Intel/AMD",
+  Z: "█ GPU         GPU cúbica",
+  J: "█ RAM         DIMM",
+  L: "█ HDD         disco 3.5\""
+};
+
+/* ================== CONSTANTES ================== */
+const COLS = 10, ROWS = 20, CELL = 30;
+const canvas = document.getElementById("board");
+const ctx = canvas.getContext("2d");
+
+/* ================== ESTADO ================== */
+let board = [], current = null, hold = null, canHold = true;
+let queue = [], score = 0, lines = 0, level = 1, best = 0;
+let dropInterval = 800, running = false, paused = false, over = false;
+let lastDrop = 0, animClear = null;
+let idSeq = 0;
+
+/* ================== UTILIDADES ================== */
+const $ = id => document.getElementById(id);
+function emptyBoard(){ return Array.from({length:ROWS}, () => Array(COLS).fill(null)); }
+function randPiece(){
+  const p = PIECES[Math.floor(Math.random()*PIECES.length)];
+  return { id: ++idSeq, type: p.type, name: p.name, color: p.color,
+           shape: p.shape.map(r => r.slice()),
+           x: Math.floor((COLS - p.shape[0].length)/2), y: 0 };
+}
+function clone(c){ return { ...c, shape: c.shape.map(r=>r.slice()) }; }
+
+function rotateCW(shape){
+  return shape[0].map((_, i) => shape.map(row => row[i]).reverse());
+}
+function rotateCCW(shape){
+  return shape[0].map((_, i) => shape.map(row => row[row.length-1-i]));
+}
+
+function collides(pc, boardArr){
+  for(let r=0;r<pc.shape.length;r++){
+    for(let c=0;c<pc.shape[r].length;c++){
+      if(!pc.shape[r][c]) continue;
+      const x = pc.x + c, y = pc.y + r;
+      if(x < 0 || x >= COLS || y >= ROWS) return true;
+      if(y >= 0 && boardArr[y][x]) return true;
+    }
+  }
+  return false;
+}
+
+/* ================== GRÁFICOS ================== */
+function drawCell(x, y, color, size, style){
+  ctx.fillStyle = color;
+  ctx.fillRect(x, y, size, size);
+  ctx.fillStyle = "rgba(255,255,255,.22)";
+  ctx.fillRect(x+2, y+2, size-4, Math.max(2, size*.18));
+  ctx.fillRect(x+2, y+2, Math.max(2, size*.18), size-4);
+  ctx.fillStyle = "rgba(0,0,0,.35)";
+  ctx.fillRect(x+size-4, y+size-4, 3, 3);
+  ctx.fillRect(x, y+size-4, size-3, 2);
+  ctx.fillStyle = "rgba(0,0,0,.5)";
+  ctx.fillRect(x+1, y+1, size, size); // borde sutil
+  ctx.fillStyle = color;
+  ctx.fillRect(x+1, y+1, size-2, size-2);
+  ctx.fillStyle = "rgba(255,255,255,.18)";
+  ctx.fillRect(x+2, y+2, size-4, size*.22);
+  // logo de componente
+  ctx.fillStyle = "rgba(0,0,0,.5)";
+  const cx = x+size/2, cy = y+size/2;
+  ctx.fillRect(cx-1.5, cy-size*.18, 3, size*.36);
+  ctx.fillRect(cx-size*.18, cy-1.5, size*.36, 3);
+  if(style === "ghost"){
+    ctx.fillStyle = color;
+    ctx.globalAlpha = .18;
+    ctx.fillRect(x+1, y+1, size-2, size-2);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // rejilla rack
+  ctx.strokeStyle = "rgba(34,48,60,.35)";
+  ctx.lineWidth = 1;
+  for(let i=1;i<COLS;i++){
+    ctx.beginPath(); ctx.moveTo(i*CELL,0); ctx.lineTo(i*CELL,ROWS*CELL); ctx.stroke();
+  }
+  for(let i=1;i<ROWS;i++){
+    ctx.beginPath(); ctx.moveTo(0,i*CELL); ctx.lineTo(COLS*CELL,i*CELL); ctx.stroke();
+  }
+  // relleno
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      if(board[r][c]) drawCell(c*CELL, r*CELL, board[r][c].color, CELL);
+    }
+  }
+  if(current && !over){
+    // ghost
+    const ghost = clone(current);
+    while(!collides({...ghost, y: ghost.y+1}, board)) ghost.y++;
+    for(let r=0;r<ghost.shape.length;r++)
+      for(let c=0;c<ghost.shape[r].length;c++)
+        if(ghost.shape[r][c]) drawCell((ghost.x+c)*CELL, (ghost.y+r)*CELL, ghost.color, CELL, "ghost");
+    // pieza activa
+    for(let r=0;r<current.shape.length;r++)
+      for(let c=0;c<current.shape[r].length;c++)
+        if(current.shape[r][c]) drawCell((current.x+c)*CELL, (current.y+r)*CELL, current.color, CELL);
+  }
+}
+
+/* ================== RENDER DE PREVIEWS ================== */
+function renderMini(gridId, piece){
+  const grid = $(gridId);
+  grid.innerHTML = "";
+  const size = piece ? piece.shape[0].length : 4;
+  const cell = 22;
+  grid.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+  for(let i=0;i<size;i++){
+    for(let j=0;j<size;j++){
+      const d = document.createElement("div");
+      d.className = "next-cell";
+      const p = piece && piece.shape[i] && piece.shape[i][j];
+      if(p){ d.classList.add("filled"); d.style.background = piece.color; }
+      grid.appendChild(d);
+    }
+  }
+}
+
+/* ================== LÓGICA ================== */
+function refillQueue(){
+  const bag = PIECES.slice();
+  for(let i=bag.length-1;i>0;i--){
+    const j = Math.floor(Math.random()*(i+1));
+    [bag[i], bag[j]] = [bag[j], bag[i]];
+  }
+  queue.push(...bag.map(p => randPiece()));
+}
+function spawn(){
+  if(queue.length < 5) refillQueue();
+  current = queue.shift();
+  renderMini("nextGrid", queue[0]);
+  if(collides(current, board)) gameOver();
+}
+function merge(){
+  for(let r=0;r<current.shape.length;r++)
+    for(let c=0;c<current.shape[r].length;c++)
+      if(current.shape[r][c]){
+        const y = current.y+r, x = current.x+c;
+        if(y>=0) board[y][x] = { type: current.type, color: current.color };
+      }
+}
+function clearLines(){
+  const full = [];
+  for(let r=0;r<ROWS;r++) if(board[r].every(cell => cell)) full.push(r);
+  if(!full.length) return;
+  // animación de "fresco del rack" (desvanecer)
+  let phase = 0;
+  const anim = setInterval(() => {
+    phase++;
+    for(const r of full)
+      for(let c=0;c<COLS;c++)
+        if(board[r][c]){
+          const f = 1 - phase/6;
+          board[r][c]._fade = f;
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+          for(let rr=0;rr<ROWS;rr++)
+            for(let cc=0;cc<COLS;cc++)
+              if(board[rr][cc]) drawCell(cc*CELL, rr*CELL, board[rr][cc].color, CELL);
+          if(f <= 0) board[r][c] = null;
+        }
+    if(phase >= 6){
+      clearInterval(anim);
+      removeLines(full.length);
+      runLineFx();
+    }
+  }, 50);
+}
+function removeLines(n){
+  for(const r of [...board.keys()]) if(board[r].every(cell=>!cell) && false){} // noop
+  const kept = board.filter(row => row.some(cell => cell));
+  while(kept.length < ROWS) kept.unshift(Array(COLS).fill(null));
+  board = kept;
+  const pts = [0, 100, 300, 500, 800];
+  score += pts[n] * level;
+  lines += n;
+  const newLevel = Math.floor(lines/10)+1;
+  if(newLevel !== level){ level = newLevel; dropInterval = Math.max(80, 800 - (level-1)*70); }
+  $("score").textContent = score;
+  $("lines").textContent = lines;
+  $("level").textContent = level;
+  updateLeds();
+  if(score > best) best = score;
+  updateTemp();
+}
+function runLineFx(){ updateLeds(); }
+function updateLeds(){
+  const arr = [$("led1"),$("led2"),$("led3"),$("led4"),$("led5")];
+  arr.forEach((l,i)=> l.className = "led " + (i < Math.min(5, level%6) ? "on" : i===level%6 ? "amber" : ""));
+}
+function updateTemp(){
+  const t = 38 + level*3 + Math.floor(score/1500);
+  $("temp").innerHTML = `TEMPERATURA: <span style="color:${t>70?'var(--red)':t>55?'var(--orange)':'var(--green)'}">${Math.min(t,99)}°C</span><br>FANS: ${Math.min(level*2,12)}× 4000 RPM<br>UPTIME: ${Math.floor((Date.now()-bootTime)/1000)}s`;
+}
+function runGameOver(){
+  over = true; running = false;
+  const ov = $("overlay");
+  ov.classList.remove("hidden");
+  ov.innerHTML = "";
+  ov.innerHTML = `
+    <h1 class="big" style="color:var(--red);">OVERHEAT!</h1>
+    <h1>KERNEL PANIC</h1>
+    <p>El rack colapsó con ${score} puntos,<br>${lines} líneas virtualizadas.<br>Reinicia el servidor para volver.</p>
+    <div class="value" style="color:var(--yellow);">BEST: ${Math.max(best,0)}</div>
+    <button class="btn btn-primary" id="restartBtn" style="width:200px;font-size:16px;">⟳ REBOOT</button>`;
+  $("restartBtn").onclick = () => { init(); start(); };
+}
+function gameOver(){ runGameOver(); }
+
+/* ================== CONTROLES ================== */
+function movePiece(dx){
+  if(!running || paused || over) return;
+  const n = clone(current); n.x += dx;
+  if(!collides(n, board)){ current = n; draw(); }
+}
+function rotate(){
+  if(!running || paused || over) return;
+  const n = clone(current); n.shape = rotateCW(n.shape);
+  // wall kicks
+  const kicks = [0,-1,1,-2,2];
+  for(const k of kicks){
+    const t = {...n, x: n.x+k};
+    if(!collides(t, board)){ current = t; draw(); return; }
+  }
+}
+function softDrop(){
+  if(!running || paused || over) return;
+  const n = clone(current); n.y += 1;
+  if(!collides(n, board)){ current = n; score += 1; $("score").textContent = score; draw(); }
+  else lockPiece();
+}
+function hardDrop(){
+  if(!running || paused || over) return;
+  let dist = 0;
+  while(!collides({...clone(current), y: current.y+1}, board)){ current.y++; dist++; }
+  score += dist*2;
+  $("score").textContent = score;
+  draw();
+  lockPiece();
+}
+function doHold(){
+  if(!running || paused || over || !canHold) return;
+  if(!hold){
+    hold = current.type;
+    renderMini("holdGrid", PIECES.find(p=>p.type===hold));
+    spawn();
+  } else {
+    const tmp = current.type;
+    const piece = PIECES.find(p=>p.type===hold);
+    current = { id: ++idSeq, type: piece.type, name: piece.name, color: piece.color,
+                shape: piece.shape.map(r=>r.slice()),
+                x: Math.floor((COLS - piece.shape[0].length)/2), y: 0 };
+    hold = tmp;
+    renderMini("holdGrid", PIECES.find(p=>p.type===hold));
+    if(collides(current, board)) gameOver();
+  }
+  canHold = false;
+  draw();
+}
+function lockPiece(){
+  merge();
+  canHold = true;
+  clearLines();
+  spawn();
+  draw();
+  updateTemp();
+}
+
+function togglePause(){
+  if(!running || over) return;
+  paused = !paused;
+  const ov = $("overlay");
+  if(paused){
+    ov.classList.remove("hidden");
+    ov.innerHTML = `
+      <h1 class="big" style="color:var(--yellow);">PAUSA</h1>
+      <p>El rack está en mantenimiento.</p>
+      <button class="btn btn-primary" id="resBtn" style="width:200px;">CONTINUAR</button>`;
+    $("resBtn").onclick = togglePause;
+  } else {
+    ov.classList.add("hidden");
+  }
+}
+
+/* ================== BUCLE ================== */
+let bootTime = 0;
+function loop(ts){
+  if(running && !paused && !over){
+    if(ts - lastDrop >= dropInterval){
+      lastDrop = ts;
+      const n = clone(current); n.y += 1;
+      if(!collides(n, board)) current = n;
+      else lockPiece();
+      draw();
+    }
+  }
+  requestAnimationFrame(loop);
+}
+
+/* ================== INICIO ================== */
+function init(){
+  board = emptyBoard();
+  score = 0; lines = 0; level = 1;
+  dropInterval = 800; canHold = true; hold = null;
+  queue = []; refillQueue();
+  $("score").textContent = "0";
+  $("lines").textContent = "0";
+  $("level").textContent = "1";
+  renderMini("holdGrid", null);
+  renderMini("nextGrid", queue[0]);
+  updateLeds();
+  updateTemp();
+}
+function start(){
+  running = true; over = false; paused = false;
+  bootTime = Date.now();
+  $("overlay").classList.add("hidden");
+  spawn();
+  draw();
+}
+
+/* ================== LEGEND ================== */
+function buildLegend(){
+  $("legend").innerHTML = Object.entries(LEGEND)
+    .map(([k,v]) => `<span style="color:${COLORS[k]};">${v}</span>`).join("<br>");
+}
+
+/* ================== EVENTOS ================== */
+document.addEventListener("keydown", e => {
+  if(e.key === "ArrowLeft") { e.preventDefault(); movePiece(-1); }
+  else if(e.key === "ArrowRight") { e.preventDefault(); movePiece(1); }
+  else if(e.key === "ArrowDown") { e.preventDefault(); softDrop(); }
+  else if(e.key === "ArrowUp") { e.preventDefault(); rotate(); }
+  else if(e.key === " ") { e.preventDefault(); hardDrop(); }
+  else if(e.key === "c" || e.key === "C") doHold();
+  else if(e.key === "p" || e.key === "P") togglePause();
+  else if(e.key === "Enter" && over) init();
+});
+
+// touch
+$("tLeft").onclick  = () => movePiece(-1);
+$("tRight").onclick = () => movePiece(1);
+$("tRot").onclick   = () => rotate();
+$("tDown").onclick  = () => softDrop();
+$("tDrop").onclick  = () => hardDrop();
+$("tHold").onclick  = () => doHold();
+
+$("holdBtn").onclick = () => doHold();
+$("startBtn").onclick = () => { init(); start(); };
+
+/* ================== BOOT ================== */
+buildLegend();
+init();
+renderMini("nextGrid", queue[0]);
+updateTemp();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
