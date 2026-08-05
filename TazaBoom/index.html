@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>TazaBoom</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #0b0b1a; font-family: 'Segoe UI', Arial, sans-serif; }
+  #wrap { position: relative; width: 100%; height: 100%; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  #boomOverlay {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    background: #000; z-index: 10; overflow: hidden;
+  }
+  #boomOverlay video { width: 100%; height: 100%; object-fit: contain; }
+  #boomText {
+    position: absolute; inset: 0; display: none; align-items: center; justify-content: center;
+    font-size: 10vw; font-weight: 900; color: #ff3b30; text-shadow: 0 0 40px #ff3b30, 0 0 80px #ff9500;
+    letter-spacing: 6px; z-index: 5; user-select: none;
+  }
+  #hud {
+    position: absolute; top: 12px; left: 0; right: 0; display: flex; justify-content: space-between;
+    align-items: flex-start; padding: 0 18px; pointer-events: none; z-index: 5;
+    font-size: 20px; color: #fff; text-shadow: 0 2px 6px rgba(0,0,0,.6); font-weight: 700;
+  }
+  #hud .lives { font-size: 24px; letter-spacing: 2px; }
+  #hud .lives .off { opacity: .25; filter: grayscale(1); }
+  #hud .stack { position: absolute; left: 50%; transform: translateX(-50%); top: 6px; background: rgba(0,0,0,.45); border-radius: 20px; padding: 6px 16px; font-size: 16px; }
+  .bar { display: inline-block; width: 30px; height: 10px; border-radius: 5px; background: #e0e0e0; margin: 0 2px; }
+  .bar.fill { background: #ffcc00; box-shadow: 0 0 8px #ffcc00; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game"></canvas>
+  <div id="hud">
+    <div id="score">Puntaje: 0</div>
+    <div id="livesBox" class="lives">❤️❤️❤️</div>
+    <div id="stackBox" class="stack">Tazas en el piso: <span id="stackCups">0</span>/5</div>
+  </div>
+  <div id="boomOverlay"><video id="boomVideo" playsinline></video></div>
+  <div id="boomText">¡BOOM!</div>
+</div>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const scoreEl = document.getElementById('score');
+  const livesEl = document.getElementById('livesBox');
+  const stackEl = document.getElementById('stackCups');
+  const boomOverlay = document.getElementById('boomOverlay');
+  const boomVideoEl = document.getElementById('boomVideo');
+  const boomTextEl = document.getElementById('boomText');
+
+  // ---- Assets ----
+  const fondo = new Image();
+  const pizzita = new Image();
+  const tazas = [];
+  fondo.onload = renderBgCache;
+
+  let W = 0, H = 0;
+  let bgCanvas = null;   // fondo precacheado a tamaño de ventana
+  function renderBgCache() {
+    bgCanvas = document.createElement('canvas');
+    bgCanvas.width = W; bgCanvas.height = H;
+    const bctx = bgCanvas.getContext('2d');
+    if (fondo.complete && fondo.naturalWidth > 0) {
+      bctx.drawImage(fondo, 0, 0, W, H);
+    } else {
+      bctx.fillStyle = '#a9d8f5'; bctx.fillRect(0, 0, W, H);
+    }
+  }
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = W;
+    canvas.height = H;
+    renderBgCache();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  fondo.src = 'fondo.jpg';
+  pizzita.src = 'pizzita.png';
+  for (let i = 0; i < 4; i++) {
+    const im = new Image();
+    im.src = 'taza' + (i + 1) + '.png';
+    tazas.push(im);
+  }
+
+  // Video boom (opcional: si falta el archivo, se usa explosión animada)
+  boomVideoEl.src = 'boom.mp4';
+  boomVideoEl.preload = 'auto';
+  let boomVideoOk = false;
+  boomVideoEl.addEventListener('canplaythrough', function () { boomVideoOk = true; });
+  boomVideoEl.addEventListener('error', function () { boomVideoOk = false; });
+  boomVideoEl.addEventListener('ended', endBoom);  // ---- Audio simple ----
+  let actx = null;
+  function audio() {
+    if (!actx) { try { actx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {} }
+    if (actx && actx.state === 'suspended') actx.resume();
+    return actx;
+  }
+  function tone(freq, dur, type, vol) {
+    if (!audio()) return;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = type || 'sine';
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(vol || 0.2, actx.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, actx.currentTime + (dur || 0.2));
+    o.connect(g); g.connect(actx.destination);
+    o.start(); o.stop(actx.currentTime + (dur || 0.2));
+  }
+  function sndCatch() { tone(880, 0.12, 'triangle', 0.15); }
+  function sndPizza() { tone(660, 0.12, 'sine', 0.18); setTimeout(function(){ tone(990, 0.16, 'sine', 0.18); }, 90); }
+  function sndBoom() { tone(120, 0.9, 'sawtooth', 0.35); setTimeout(function(){ tone(70, 1.0, 'square', 0.25); }, 120); }
+  function sndGameOver() { tone(220, 0.4, 'sawtooth', 0.2); setTimeout(function(){ tone(160, 0.5, 'sawtooth', 0.2); }, 350); }
+
+  // ---- Estado ----
+  const MAX_LIVES = 3;
+  const MAX_STACK = 5;
+  let state = 'menu';            // menu | playing | paused | boom | gameover
+  let score = 0;
+  let lives = MAX_LIVES;
+  let landed = 0;                // tazas acumuladas en el piso
+  let items = [];
+  let floaters = [];
+  let particles = [];
+  let shake = 0;
+  let elapsed = 0;
+  let spawnTimer = 0;
+  let pizzitaTimer = 8;
+  let lastPizzitaX = -999;
+
+  const keys = {};
+  const player = { w: 130, h: 26, x: 0 };
+  const groundY = () => H - 92;               // parte superior del césped
+
+  // Tamaños calculados según las dimensiones reales de cada imagen
+  function naturalSize(img) {
+    return (img.naturalWidth > 0 && img.naturalHeight > 0) ? { w: img.naturalWidth, h: img.naturalHeight } : null;
+  }
+  function cupSize(kind) {
+    const n = naturalSize(tazas[kind]);
+    const h = 120;
+    const ratio = n ? n.w / n.h : 1;
+    return { w: Math.round(h * ratio), h: h };
+  }
+  function pizzSize() {
+    const n = naturalSize(pizzita);
+    const h = 105;
+    const ratio = n ? n.w / n.h : 1;
+    return { w: Math.round(h * ratio), h: h };
+  }
+
+  function reset() {
+    score = 0; lives = MAX_LIVES; landed = 0;
+    items = []; floaters = []; particles = [];
+    elapsed = 0; spawnTimer = 0.5; pizzitaTimer = 8; lastPizzitaX = -999;
+    player.x = W / 2;
+    state = 'playing';
+  }
+
+  // ---- Spawn ----
+  function spawnCup() {
+    const kind = Math.floor(Math.random() * tazas.length);
+    const s = cupSize(kind);
+    const speed = 120 + Math.min(12, Math.floor(elapsed / 15)) * 14 + Math.random() * 50;
+    items.push({
+      type: 'taza', kind: kind, x: 10 + Math.random() * (W - s.w - 20),
+      y: -s.h, w: s.w, h: s.h, vy: speed
+    });
+  }
+  function spawnPizzita() {
+    const s = pizzSize();
+    let x;
+    do { x = 10 + Math.random() * (W - s.w - 20); } while (Math.abs(x - lastPizzitaX) < W * 0.3);
+    lastPizzitaX = x;
+    items.push({ type: 'pizzita', x: x, y: -s.h, w: s.w, h: s.h, vy: 130 });
+  }
+
+  function updateSpawns(dt) {
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnCup();
+      const level = Math.min(8, Math.floor(elapsed / 15));
+      spawnTimer = Math.max(0.45, 1.05 - level * 0.08) * (0.75 + Math.random() * 0.5);
+    }
+    pizzitaTimer -= dt;
+    if (pizzitaTimer <= 0) {
+      spawnPizzita();
+      pizzitaTimer = 9 + Math.random() * 6;
+    }
+  }
+
+  // ---- Efectos ----
+  function addFloater(x, y, text, color) {
+    floaters.push({ x: x, y: y, text: text, color: color, t: 0, life: 0.9 });
+  }
+  function burst(x, y, color, n) {
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const s = 60 + Math.random() * 220;
+      particles.push({ x: x, y: y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life: 0.5 + Math.random() * 0.4, t: 0, color: color, size: 3 + Math.random() * 5 });
+    }
+  }
+
+  // ---- Boom (video o explosión de respaldo) ----
+  function startBoom() {
+    state = 'boom';
+    boomStart = performance.now();
+    shake = 22;
+    burst(W / 2, groundY() - 60, '#ff9500', 26);
+    burst(W / 2, groundY() - 60, '#ff3b30', 22);
+    items = [];
+    if (boomVideoOk) {
+      boomOverlay.style.display = 'flex';
+      boomVideoEl.currentTime = 0;
+      boomVideoEl.muted = false;
+      boomVideoEl.play().catch(function () { fallbackBoom(); });
+      // Seguridad por si el video se traba o no dispara 'ended'
+      const guard = (isFinite(boomVideoEl.duration) && boomVideoEl.duration > 0)
+        ? Math.min(boomVideoEl.duration * 1000 + 400, 6000) : 4000;
+      setTimeout(function () {
+        if (state === 'boom' && !boomVideoEl.ended) endBoom();
+      }, guard);
+    } else {
+      sndBoom();
+      fallbackBoom();
+    }
+  }
+  function fallbackBoom() {
+    boomTextEl.style.display = 'flex';
+    setTimeout(endBoom, 1600);
+  }
+  function endBoom() {
+    if (state !== 'boom') return;
+    boomVideoEl.pause();
+    boomOverlay.style.display = 'none';
+    boomTextEl.style.display = 'none';
+    lives--;
+    landed = 0;
+    updateHud();
+    if (lives <= 0) {
+      state = 'gameover';
+      sndGameOver();
+      if (score > getHigh()) saveHigh(score);
+    } else {
+      state = 'playing';
+    }
+  }
+
+  // ---- HUD ----
+  function getHigh() { try { return parseInt(localStorage.getItem('tazaboom_high') || '0', 10) || 0; } catch (e) { return 0; } }
+  function saveHigh(v) { try { localStorage.setItem('tazaboom_high', String(v)); } catch (e) {} }
+
+  function updateHud() {
+    scoreEl.textContent = 'Puntaje: ' + score;
+    let hearts = '';
+    for (let i = 0; i < MAX_LIVES; i++) hearts += (i < lives) ? '❤️' : '🖤';
+    livesEl.innerHTML = hearts;
+    stackEl.textContent = landed + '/5';
+  }
+
+  // ---- Update ----
+  function updatePlaying(dt) {
+    elapsed += dt;
+    updateSpawns(dt);
+
+    // Movimiento del jugador
+    const move = (keys['ArrowLeft'] || keys['KeyA'] ? -1 : 0) + (keys['ArrowRight'] || keys['KeyD'] ? 1 : 0);
+    player.x += move * 520 * dt;
+    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
+
+    // Items
+    for (let i = items.length - 1; i >= 0; i--) {
+      const it = items[i];
+      it.y += it.vy * dt;
+
+      const cx = it.x + it.w / 2;
+      const caught = (it.y + it.h >= player.y()) &&
+                     (it.y <= player.y() + player.h) &&
+                     (cx >= player.x - player.w / 2) &&
+                     (cx <= player.x + player.w / 2);
+
+      if (caught) {
+        if (it.type === 'taza') {
+          score += 100;
+          addFloater(cx, it.y, '+100', '#ffe066');
+          burst(cx, it.y + it.h / 2, '#ffcc00', 12);
+          sndCatch();
+        } else {
+          lives = Math.min(MAX_LIVES, lives + 1);
+          addFloater(cx, it.y, '+1 VIDA', '#7dff7d');
+          burst(cx, it.y + it.h / 2, '#ff5e57', 14);
+          sndPizza();
+        }
+        items.splice(i, 1);
+        updateHud();
+        continue;
+      }
+
+      if (it.type === 'pizzita' && it.y > H) {
+        items.splice(i, 1);
+        continue;
+      }
+
+      if (it.type === 'taza' && it.y + it.h >= groundY()) {
+        items.splice(i, 1);
+        landed++;
+        burst(it.x + it.w / 2, groundY() - 30, '#8ab4f8', 8);
+        tone(180, 0.12, 'square', 0.12);
+        updateHud();
+        if (landed >= MAX_STACK) { startBoom(); return; }
+        continue;
+      }
+    }
+
+    // Partículas
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.t += dt;
+      if (p.t > p.life) { particles.splice(i, 1); continue; }
+      p.x += p.vx * dt; p.y += p.vy * dt; p.vy += 300 * dt;
+    }
+    // Textos flotantes
+    for (let i = floaters.length - 1; i >= 0; i--) {
+      const f = floaters[i];
+      f.t += dt; f.y -= 55 * dt;
+      if (f.t > f.life) floaters.splice(i, 1);
+    }
+    if (shake > 0) shake = Math.max(0, shake - 40 * dt);
+  }
+
+  // ---- Draw ----
+  function drawBackground() {
+    if (bgCanvas) {
+      ctx.drawImage(bgCanvas, 0, 0);
+    } else if (fondo.complete && fondo.naturalWidth > 0) {
+      ctx.drawImage(fondo, 0, 0, W, H);
+    } else {
+      ctx.fillStyle = '#a9d8f5'; ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function drawPlayer() {
+    const p = player;
+    const y = p.y();
+    ctx.save();
+    ctx.shadowColor = 'rgba(0,0,0,0.35)';
+    ctx.shadowBlur = 10;
+    const grad = ctx.createLinearGradient(0, y, 0, y + p.h);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(1, '#c8c8d8');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(p.x, y + p.h / 2, p.w / 2, p.h / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+    ctx.strokeStyle = '#8a8aa0';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(p.x, y + p.h / 2, p.w / 2 - 3, p.h / 2 - 3, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.fillStyle = 'rgba(180,180,200,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(p.x, y + p.h / 2, p.w / 2 - 18, p.h / 2 - 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  function drawLandedCups() {
+    const gy = groundY();
+    const s = cupSize(0);
+    const w = s.w * 0.42, h = s.h * 0.42;
+    for (let i = 0; i < landed; i++) {
+      const x = 16 + i * (w + 6);
+      const img = tazas[i % tazas.length];
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, x, gy - h + 14, w, h);
+      }
+    }
+  }
+
+  function drawItems() {
+    for (const it of items) {
+      let img, w, h;
+      if (it.type === 'taza') { img = tazas[it.kind]; w = it.w; h = it.h; }
+      else { img = pizzita; w = it.w; h = it.h; }
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, it.x, it.y, w, h);
+      } else {
+        ctx.fillStyle = it.type === 'taza' ? '#666' : '#e0a020';
+        ctx.fillRect(it.x, it.y, w, h);
+      }
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      const a = 1 - p.t / p.life;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawFloaters() {
+    ctx.font = 'bold 26px "Segoe UI", Arial';
+    ctx.textAlign = 'center';
+    for (const f of floaters) {
+      const a = 1 - f.t / f.life;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = f.color;
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.lineWidth = 4;
+      ctx.strokeText(f.text, f.x, f.y);
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawExplosion() {
+    if (state !== 'boom') return;
+    const t = (performance.now() - boomStart) / 1000;
+    const cx = W / 2, cy = groundY() - 40;
+    const r = 30 + t * 500;
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, 1 - t / 1.6);
+    const grad = ctx.createRadialGradient(cx, cy, 10, cx, cy, r);
+    grad.addColorStop(0, 'rgba(255,240,180,0.95)');
+    grad.addColorStop(0.5, 'rgba(255,120,40,0.9)');
+    grad.addColorStop(1, 'rgba(255,30,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
+  let boomStart = 0;
+
+  function drawHudTexts() {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.fillRect(0, 0, W, 34);
+    updateHud();
+  }
+
+  function drawScreen() {
+    ctx.save();
+    if (shake > 0) {
+      ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+    }
+    drawBackground();
+    drawLandedCups();
+    drawItems();
+    drawPlayer();
+    drawParticles();
+    drawFloaters();
+    drawExplosion();
+    ctx.restore();
+  }
+
+  function centerText(text, y, size, color, shadow) {
+    ctx.font = 'bold ' + size + 'px "Segoe UI", Arial';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = color;
+    ctx.shadowColor = shadow || 'rgba(0,0,0,0.7)';
+    ctx.shadowBlur = 12;
+    ctx.fillText(text, W / 2, y);
+    ctx.shadowBlur = 0;
+  }
+
+  function drawMenu() {
+    drawScreen();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.fillRect(0, 0, W, H);
+    centerText('TAZA BOOM', H * 0.32, Math.max(44, Math.min(80, W * 0.08)), '#ffd34d');
+    centerText('¡Atrapá las tazas que caen!', H * 0.32 + 52, 26, '#ffffff');
+    centerText('Si se acumulan 5 en el piso... ¡BOOM! (-1 vida)', H * 0.32 + 90, 18, '#ff9e9e');
+    centerText('Atrapá la pizzita 🍕 para recuperar vida', H * 0.32 + 118, 18, '#aaffaa');
+    centerText('Récord: ' + getHigh(), H * 0.32 + 156, 22, '#ffe066');
+    centerText('ENTER para jugar', H * 0.78, 32, '#ffffff');
+  }
+
+  function drawPaused() {
+    drawScreen();
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.fillRect(0, 0, W, H);
+    centerText('PAUSA', H * 0.45, 52, '#ffffff');
+    centerText('P para continuar', H * 0.45 + 48, 22, '#cccccc');
+  }
+
+  function drawGameOver() {
+    drawScreen();
+    ctx.fillStyle = 'rgba(0,0,0,0.65)';
+    ctx.fillRect(0, 0, W, H);
+    centerText('GAME OVER', H * 0.35, Math.max(44, Math.min(72, W * 0.07)), '#ff3b30');
+    centerText('Puntaje: ' + score, H * 0.35 + 66, 30, '#ffffff');
+    centerText('Récord: ' + getHigh(), H * 0.35 + 100, 22, '#ffe066');
+    centerText('ENTER para jugar de nuevo', H * 0.72, 28, '#ffffff');
+  }
+
+  // ---- Loop ----
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    if (state === 'playing') {
+      try { updatePlaying(dt); }
+      catch (e) { console.error('updatePlaying:', e); }
+    }
+
+    switch (state) {
+      case 'menu': drawMenu(); break;
+      case 'paused': drawPaused(); break;
+      case 'gameover': drawGameOver(); break;
+      case 'boom': drawScreen(); break;
+      default: drawScreen(); drawHudTexts(); break;
+    }
+
+    if (state === 'menu' || state === 'gameover' || state === 'boom') updateHud();
+    requestAnimationFrame(loop);
+  }
+
+  // ---- Entrada ----
+  window.addEventListener('keydown', function (e) {
+    keys[e.code] = true;
+    if (e.code === 'Enter' || e.code === 'Space') {
+      if (state === 'menu' || state === 'gameover') { audio(); reset(); }
+    }
+    if (e.code === 'KeyP' && (state === 'playing' || state === 'paused')) {
+      state = state === 'playing' ? 'paused' : 'playing';
+    }
+    if (e.code === 'ArrowLeft' || e.code === 'ArrowRight' || e.code === 'Space') e.preventDefault();
+  });
+  window.addEventListener('keyup', function (e) { keys[e.code] = false; });
+
+  let pointerX = null;
+  function setPointer(e) {
+    const rect = canvas.getBoundingClientRect();
+    pointerX = (e.clientX - rect.left) * (W / rect.width);
+    player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, pointerX));
+  }
+  window.addEventListener('mousemove', setPointer);
+  window.addEventListener('touchmove', function (e) { e.preventDefault(); setPointer(e.touches[0]); }, { passive: false });
+  canvas.addEventListener('mousedown', function () { if (state === 'menu' || state === 'gameover') { audio(); reset(); } });
+
+  player.y = function () { return groundY() - player.h - 6; };
+
+  requestAnimationFrame(function (now) {
+    last = now;
+    requestAnimationFrame(loop);
+  });
+  updateHud();
+})();
+</script>
+</body>
+</html>
